@@ -79,10 +79,8 @@ func (l *Loop) Run() error {
 		if l.stop.Load() {
 			return nil
 		}
-		select {
-		case <-ticker.C:
-			l.iterate()
-		}
+		<-ticker.C
+		l.iterate()
 	}
 }
 

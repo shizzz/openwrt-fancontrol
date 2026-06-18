@@ -70,7 +70,9 @@ type Terms struct {
 // controller parameters.  It returns the output (clamped to [OutMin,OutMax])
 // and the individual terms for diagnostic logging.
 func Compute(p *Params, s *State, measured float64) Terms {
-	err := p.Setpoint - measured
+	// Error convention for a one-directional cooling actuator (fan):
+	// err > 0 when measured is above setpoint → output rises → more cooling.
+	err := measured - p.Setpoint
 
 	// ---- Proportional -------------------------------------------------------
 	pTerm := p.Kp * err
