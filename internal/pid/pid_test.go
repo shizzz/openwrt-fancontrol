@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/openwr-fancontrol/internal/pid"
+	"github.com/shizzz/openwrt-fancontrol/internal/pid"
 )
 
 func defaultParams() pid.Params {

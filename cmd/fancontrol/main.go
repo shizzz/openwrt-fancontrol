@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/openwr-fancontrol/internal/config"
-	"github.com/openwr-fancontrol/internal/control"
-	"github.com/openwr-fancontrol/internal/log"
+	"github.com/shizzz/openwrt-fancontrol/internal/config"
+	"github.com/shizzz/openwrt-fancontrol/internal/control"
+	"github.com/shizzz/openwrt-fancontrol/internal/log"
 )
 
 func main() {
@@ -20,7 +20,7 @@ func main() {
 	}
 
 	logger := log.New(cfg.Debug)
-	logger.Infof("openwr-fancontrol starting (mode=%s dry_run=%v)", cfg.ControlMode, cfg.DryRun)
+	logger.Infof("openwrt-fancontrol starting (mode=%s dry_run=%v)", cfg.ControlMode, cfg.DryRun)
 
 	loop := control.NewLoop(cfg, logger)
 
@@ -39,5 +39,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Infof("openwr-fancontrol stopped cleanly")
+	logger.Infof("openwrt-fancontrol stopped cleanly")
 }

@@ -11,10 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/openwr-fancontrol/internal/config"
-	"github.com/openwr-fancontrol/internal/log"
-	"github.com/openwr-fancontrol/internal/pid"
-	"github.com/openwr-fancontrol/internal/sysfs"
+	"github.com/shizzz/openwrt-fancontrol/internal/config"
+	"github.com/shizzz/openwrt-fancontrol/internal/log"
+	"github.com/shizzz/openwrt-fancontrol/internal/pid"
+	"github.com/shizzz/openwrt-fancontrol/internal/sysfs"
 )
 
 // controller is the interface every control mode must satisfy.

@@ -1,4 +1,4 @@
-# openwr-fancontrol
+# openwrt-fancontrol
 
 A production-ready PWM fan control daemon for OpenWrt Linux, written in Go.
 
@@ -16,7 +16,7 @@ A production-ready PWM fan control daemon for OpenWrt Linux, written in Go.
 ## Directory layout
 
 ```
-openwr-fancontrol/
+openwrt-fancontrol/
 ├── cmd/fancontrol/main.go          # entrypoint
 ├── internal/
 │   ├── config/config.go            # env-based config loader

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/openwr-fancontrol/internal/sysfs"
+	"github.com/shizzz/openwrt-fancontrol/internal/sysfs"
 )
 
 func writeTempFile(t *testing.T, dir, name, content string) string {
