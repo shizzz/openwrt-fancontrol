@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    branches:
+      - develop
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - run: go mod download
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - run: go mod download
+
+      - run: make test
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - run: go mod download
+
+      - name: Build
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          GOMIPS: ${{ matrix.gomips }}
+          GOMIPS64: ${{ matrix.gomips64 }}
+        run: |
+          mkdir -p dist
+          SHORT="${GITHUB_SHA::7}"
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X main.Version=dev -X main.Commit=${SHORT} -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o "dist/openwrt-fancontrol-${{ matrix.suffix }}-${SHORT}" \
+            ./cmd/fancontrol
+
+      - name: Package
+        run: |
+          cd dist
+          SHORT="${GITHUB_SHA::7}"
+          tar czf "openwrt-fancontrol-${{ matrix.suffix }}-${SHORT}.tar.gz" \
+            "openwrt-fancontrol-${{ matrix.suffix }}-${SHORT}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.suffix }}-${{ github.sha }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
