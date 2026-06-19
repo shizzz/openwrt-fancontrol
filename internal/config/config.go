@@ -1,5 +1,3 @@
-// ===== file: internal/config/config.go =====
-
 package config
 
 import (
@@ -18,130 +16,349 @@ const (
 	ModeTable ControlMode = "table"
 )
 
-// Config holds all runtime configuration for the daemon.
-// Values are sourced from environment variables so the daemon can be
-// configured via /etc/init.d procd env blocks and later extended to
-// read UCI config without breaking the existing interface.
-type Config struct {
-	// Hardware paths
-	ThermalZonePath string // e.g. /sys/class/thermal/thermal_zone0/temp
-	PWMPath         string // e.g. /sys/class/hwmon/hwmon0/pwm1
-	PWMEnablePath   string // e.g. /sys/class/hwmon/hwmon0/pwm1_enable
+// FanConfig is the configuration for a single fan.  In UCI each section
+// of type `fancontrol` becomes one FanConfig; in env-only mode a single
+// fan named "default" is constructed from FANCTL_* variables.
+type FanConfig struct {
+	Name string // identifier (from UCI section name or "default" for env)
 
-	// Control
-	ControlMode ControlMode
-	Interval    time.Duration
+	Enabled bool
+	Mode    ControlMode
+	Setpoint float64
 
-	// Safety limits (raw PWM 0–255)
-	MinPWM int
-	MaxPWM int
+	Kp float64
+	Ki float64
+	Kd float64
 
-	// Fixed mode
+	MinPWM   int
+	MaxPWM   int
 	FixedPWM int
 
-	// PID parameters
-	Kp          float64
-	Ki          float64
-	Kd          float64
-	Setpoint    float64 // target temperature in °C
-	PIDInterval float64 // dt in seconds, derived from Interval
+	Interval time.Duration
 
-	// Operational flags
+	ThermalPath   string
+	PWMPath       string
+	PWMEnablePath string
+
 	DryRun bool
 	Debug  bool
 }
 
-// Load reads configuration from environment variables and returns a Config
-// populated with sensible production defaults for OpenWrt.
+// Config is the daemon-wide configuration: one or more fans.
+type Config struct {
+	Fans []FanConfig
+}
+
+// Load reads configuration:
+//   - If /etc/config/fancontrol exists, it is parsed and env vars are
+//     IGNORED.  Every `config fancontrol '<name>'` section that has
+//     `option enabled '1'` (or omits `enabled`) becomes a running fan.
+//   - If no UCI file exists, a single fan named "default" is built
+//     from FANCTL_* env vars (always enabled).
+//
+// Returns an error if no fans end up enabled.
 func Load() (*Config, error) {
-	cfg := &Config{
-		ThermalZonePath: getenv("FANCTL_THERMAL_PATH", "/sys/class/thermal/thermal_zone0/temp"),
-		PWMPath:         getenv("FANCTL_PWM_PATH", "/sys/class/hwmon/hwmon0/pwm1"),
-		PWMEnablePath:   getenv("FANCTL_PWM_ENABLE_PATH", "/sys/class/hwmon/hwmon0/pwm1_enable"),
+	return loadAt(defaultUCIPath)
+}
 
-		ControlMode: ControlMode(getenv("FANCTL_MODE", string(ModePID))),
-
-		MinPWM:   getenvInt("FANCTL_MIN_PWM", 0),
-		MaxPWM:   getenvInt("FANCTL_MAX_PWM", 255),
-		FixedPWM: getenvInt("FANCTL_FIXED_PWM", 128),
-
-		Kp:       getenvFloat("FANCTL_KP", 2.0),
-		Ki:       getenvFloat("FANCTL_KI", 0.5),
-		Kd:       getenvFloat("FANCTL_KD", 1.0),
-		Setpoint: getenvFloat("FANCTL_SETPOINT", 55.0), // °C
-
-		DryRun: getenvBool("FANCTL_DRY_RUN", false),
-		Debug:  getenvBool("FANCTL_DEBUG", false),
-	}
-
-	intervalSec := getenvFloat("FANCTL_INTERVAL_SEC", 1.0)
-	if intervalSec <= 0 {
-		return nil, fmt.Errorf("FANCTL_INTERVAL_SEC must be > 0, got %v", intervalSec)
-	}
-	cfg.Interval = time.Duration(intervalSec * float64(time.Second))
-	cfg.PIDInterval = intervalSec
-
-	switch cfg.ControlMode {
-	case ModePID, ModeFixed, ModeTable:
-		// valid
+// loadAt is like Load but lets callers (and tests) override the UCI path.
+func loadAt(uciPath string) (*Config, error) {
+	switch _, err := os.Stat(uciPath); {
+	case err == nil:
+		return loadFromUCI(uciPath)
+	case os.IsNotExist(err):
+		return loadFromEnv()
 	default:
-		return nil, fmt.Errorf("unknown control mode %q; valid: pid, fixed, table", cfg.ControlMode)
+		return nil, fmt.Errorf("stat uci %q: %w", uciPath, err)
+	}
+}
+
+func loadFromUCI(path string) (*Config, error) {
+	sections, err := parseUCISections(path)
+	if err != nil {
+		return nil, err
 	}
 
-	if cfg.MinPWM < 0 || cfg.MinPWM > 255 {
-		return nil, fmt.Errorf("FANCTL_MIN_PWM must be 0–255, got %d", cfg.MinPWM)
-	}
-	if cfg.MaxPWM < 0 || cfg.MaxPWM > 255 {
-		return nil, fmt.Errorf("FANCTL_MAX_PWM must be 0–255, got %d", cfg.MaxPWM)
-	}
-	if cfg.MinPWM > cfg.MaxPWM {
-		return nil, fmt.Errorf("FANCTL_MIN_PWM (%d) must be <= FANCTL_MAX_PWM (%d)", cfg.MinPWM, cfg.MaxPWM)
+	cfg := &Config{}
+	for _, sec := range sections {
+		if sec.Type != "fancontrol" {
+			continue
+		}
+		fan, err := fanFromUCI(sec)
+		if err != nil {
+			return nil, fmt.Errorf("fan section %q: %w", sectionLabel(sec), err)
+		}
+		if !fan.Enabled {
+			continue
+		}
+		cfg.Fans = append(cfg.Fans, fan)
 	}
 
+	if len(cfg.Fans) == 0 {
+		return nil, fmt.Errorf("no enabled fans in %s (every `config fancontrol` section has `option enabled '0'`, or no `fancontrol` sections are present)", path)
+	}
 	return cfg, nil
 }
 
-// ---- helpers ---------------------------------------------------------------
-
-func getenv(key, fallback string) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
+func loadFromEnv() (*Config, error) {
+	fan, err := fanFromEnv()
+	if err != nil {
+		return nil, err
 	}
-	return fallback
+	return &Config{Fans: []FanConfig{fan}}, nil
 }
 
-func getenvInt(key string, fallback int) int {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return fallback
+// sectionLabel returns a human-readable identifier for diagnostics.
+func sectionLabel(sec UCISection) string {
+	if sec.Name != "" {
+		return "fancontrol." + sec.Name
 	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return fallback
-	}
-	return n
+	return "fancontrol (anonymous)"
 }
 
-func getenvFloat(key string, fallback float64) float64 {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return fallback
+// fanFromUCI builds a FanConfig from a single UCI section, layered on
+// top of hardcoded defaults.  Unrecognised option names are silently
+// ignored.
+func fanFromUCI(sec UCISection) (FanConfig, error) {
+	fan := defaultsFan(sec.Name)
+	if err := applyUCIOptions(&fan, sec.Options); err != nil {
+		return fan, err
 	}
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
-		return fallback
+	if err := validateFan(&fan); err != nil {
+		return fan, err
 	}
-	return f
+	return fan, nil
 }
 
-func getenvBool(key string, fallback bool) bool {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return fallback
+// fanFromEnv builds the single env-driven fan from FANCTL_* vars
+// layered on top of defaults.
+func fanFromEnv() (FanConfig, error) {
+	fan := defaultsFan("default")
+	applyEnvFan(&fan)
+	if err := validateFan(&fan); err != nil {
+		return fan, err
 	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return fallback
+	return fan, nil
+}
+
+// defaultsFan returns a FanConfig populated with OpenWrt-friendly
+// defaults.  `name` is the fan identifier (UCI section name or
+// "default" for env-only mode).
+func defaultsFan(name string) FanConfig {
+	return FanConfig{
+		Name:          name,
+		Enabled:       true,
+		Mode:          ModePID,
+		Setpoint:      55.0,
+		Kp:            2.0,
+		Ki:            0.5,
+		Kd:            1.0,
+		MinPWM:        0,
+		MaxPWM:        255,
+		FixedPWM:      128,
+		Interval:      time.Second,
+		ThermalPath:   "/sys/class/thermal/thermal_zone0/temp",
+		PWMPath:       "/sys/class/hwmon/hwmon0/pwm1",
+		PWMEnablePath: "/sys/class/hwmon/hwmon0/pwm1_enable",
 	}
-	return b
+}
+
+// applyUCIOptions overlays UCI options onto fan.  Unknown options are
+// silently ignored so the binary can read future schema additions.
+// Type errors in numeric/bool options are returned.
+func applyUCIOptions(fan *FanConfig, opts map[string]string) error {
+	if v, ok := opts["enabled"]; ok {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("enabled=%q: %w", v, err)
+		}
+		fan.Enabled = b
+	}
+	if v, ok := opts["thermal_path"]; ok {
+		fan.ThermalPath = v
+	}
+	if v, ok := opts["pwm_path"]; ok {
+		fan.PWMPath = v
+	}
+	if v, ok := opts["pwm_enable_path"]; ok {
+		fan.PWMEnablePath = v
+	}
+	if v, ok := opts["mode"]; ok {
+		switch ControlMode(v) {
+		case ModePID, ModeFixed, ModeTable:
+			fan.Mode = ControlMode(v)
+		default:
+			return fmt.Errorf("unknown mode %q", v)
+		}
+	}
+	if v, ok := opts["min_pwm"]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("min_pwm=%q: %w", v, err)
+		}
+		fan.MinPWM = n
+	}
+	if v, ok := opts["max_pwm"]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("max_pwm=%q: %w", v, err)
+		}
+		fan.MaxPWM = n
+	}
+	if v, ok := opts["fixed_pwm"]; ok {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("fixed_pwm=%q: %w", v, err)
+		}
+		fan.FixedPWM = n
+	}
+	for _, key := range []string{"kp", "ki", "kd", "setpoint"} {
+		v, ok := opts[key]
+		if !ok {
+			continue
+		}
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return fmt.Errorf("%s=%q: %w", key, v, err)
+		}
+		switch key {
+		case "kp":
+			fan.Kp = f
+		case "ki":
+			fan.Ki = f
+		case "kd":
+			fan.Kd = f
+		case "setpoint":
+			fan.Setpoint = f
+		}
+	}
+	if v, ok := opts["interval_sec"]; ok {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return fmt.Errorf("interval_sec=%q: %w", v, err)
+		}
+		fan.Interval = time.Duration(f * float64(time.Second))
+	}
+	if v, ok := opts["dry_run"]; ok {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("dry_run=%q: %w", v, err)
+		}
+		fan.DryRun = b
+	}
+	if v, ok := opts["debug"]; ok {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("debug=%q: %w", v, err)
+		}
+		fan.Debug = b
+	}
+	return nil
+}
+
+// applyEnvFan overlays FANCTL_* env vars onto fan.  Type errors are
+// silently ignored (defaults are preserved).
+func applyEnvFan(fan *FanConfig) {
+	if v, ok := os.LookupEnv("FANCTL_ENABLED"); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			fan.Enabled = b
+		}
+	}
+	if v, ok := os.LookupEnv("FANCTL_THERMAL_PATH"); ok {
+		fan.ThermalPath = v
+	}
+	if v, ok := os.LookupEnv("FANCTL_PWM_PATH"); ok {
+		fan.PWMPath = v
+	}
+	if v, ok := os.LookupEnv("FANCTL_PWM_ENABLE_PATH"); ok {
+		fan.PWMEnablePath = v
+	}
+	if v, ok := os.LookupEnv("FANCTL_MODE"); ok {
+		fan.Mode = ControlMode(v)
+	}
+	if v, ok := os.LookupEnv("FANCTL_INTERVAL_SEC"); ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			fan.Interval = time.Duration(f * float64(time.Second))
+		}
+	}
+	if v, ok := os.LookupEnv("FANCTL_SETPOINT"); ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			fan.Setpoint = f
+		}
+	}
+	if v, ok := os.LookupEnv("FANCTL_KP"); ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			fan.Kp = f
+		}
+	}
+	if v, ok := os.LookupEnv("FANCTL_KI"); ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			fan.Ki = f
+		}
+	}
+	if v, ok := os.LookupEnv("FANCTL_KD"); ok {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			fan.Kd = f
+		}
+	}
+	if v, ok := os.LookupEnv("FANCTL_MIN_PWM"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			fan.MinPWM = n
+		}
+	}
+	if v, ok := os.LookupEnv("FANCTL_MAX_PWM"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			fan.MaxPWM = n
+		}
+	}
+	if v, ok := os.LookupEnv("FANCTL_FIXED_PWM"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			fan.FixedPWM = n
+		}
+	}
+	if v, ok := os.LookupEnv("FANCTL_DRY_RUN"); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			fan.DryRun = b
+		}
+	}
+	if v, ok := os.LookupEnv("FANCTL_DEBUG"); ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			fan.Debug = b
+		}
+	}
+}
+
+func validateFan(fan *FanConfig) error {
+	switch fan.Mode {
+	case ModePID, ModeFixed, ModeTable:
+		// valid
+	default:
+		return fmt.Errorf("unknown control mode %q", fan.Mode)
+	}
+
+	if fan.MinPWM < 0 || fan.MinPWM > 255 {
+		return fmt.Errorf("min_pwm must be 0–255, got %d", fan.MinPWM)
+	}
+	if fan.MaxPWM < 0 || fan.MaxPWM > 255 {
+		return fmt.Errorf("max_pwm must be 0–255, got %d", fan.MaxPWM)
+	}
+	if fan.MinPWM > fan.MaxPWM {
+		return fmt.Errorf("min_pwm (%d) must be <= max_pwm (%d)", fan.MinPWM, fan.MaxPWM)
+	}
+
+	if fan.Interval <= 0 {
+		return fmt.Errorf("interval_sec must be > 0, got %v", fan.Interval)
+	}
+
+	if fan.ThermalPath == "" {
+		return fmt.Errorf("thermal_path is required")
+	}
+	if fan.PWMPath == "" {
+		return fmt.Errorf("pwm_path is required")
+	}
+	if fan.PWMEnablePath == "" {
+		return fmt.Errorf("pwm_enable_path is required")
+	}
+
+	return nil
 }

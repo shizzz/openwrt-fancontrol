@@ -65,9 +65,6 @@ jobs:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          GOARM: ${{ matrix.goarm }}
-          GOMIPS: ${{ matrix.gomips }}
-          GOMIPS64: ${{ matrix.gomips64 }}
         run: |
           mkdir -p dist
           SHORT="${GITHUB_SHA::7}"
