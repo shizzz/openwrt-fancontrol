@@ -102,7 +102,53 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Generate checksums
+        run: |
+          cd artifacts
+
+          sha256sum *.tar.gz | LC_ALL=C sort -k2 > SHA256SUMS
+
+          {
+            echo "# Auto-generated SHA256 checksums for OpenWrt package Makefile"
+            echo "# Release: ${{ github.ref_name }}"
+            echo "# Source: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/"
+            echo ""
+            for f in *.tar.gz; do
+              hash=$(sha256sum "$f" | awk '{print $1}')
+              suffix="${f#openwrt-fancontrol-}"
+              suffix="${suffix%.tar.gz}"
+              printf 'PKG_HASH_%s:=%s\n' "$suffix" "$hash"
+            done
+            echo ""
+            echo "# OpenWrt ARCH -> release suffix mapping:"
+            echo "#   aarch64  -> linux-arm64"
+            echo "#   arm      -> linux-armv7"
+            echo "#   mipsel   -> linux-mipsel"
+            echo "#   mips64   -> linux-mips64el"
+            echo "#   x86_64   -> linux-amd64"
+          } > hashes.mk
+
+          {
+            echo "## SHA256 checksums"
+            echo ""
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+            echo ""
+            echo "Download \`hashes.mk\` from this release and include it in the OpenWrt package Makefile:"
+            echo ""
+            echo '```makefile'
+            echo 'include $(CURDIR)/hashes.mk'
+            echo 'PKG_HASH:=$(PKG_HASH_$(OPENWRT_FANCONTROL_SUFFIX))'
+            echo '```'
+          } > checksums-body.md
+
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: artifacts/*.tar.gz
+          append_body: true
+          body_path: artifacts/checksums-body.md
+          files: |
+            artifacts/*.tar.gz
+            artifacts/SHA256SUMS
+            artifacts/hashes.mk
