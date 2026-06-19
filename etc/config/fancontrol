@@ -1,0 +1,66 @@
+# /etc/config/fancontrol — UCI schema for openwrt-fancontrol.
+#
+# Each `config fancontrol '<name>'` section defines one independently
+# driven fan.  Set `option enabled '0'` to disable a section without
+# removing it (useful for temporarily silencing a fan).
+#
+# Validate with:   uci show fancontrol
+# After editing:   /etc/init.d/fancontrol restart
+
+# CPU fan: aggressive cooling, high minimum PWM so it never stalls.
+config fancontrol 'cpu'
+	option enabled '1'
+	option mode 'pid'
+	option setpoint '60'
+	option kp '2.0'
+	option ki '0.5'
+	option kd '1.0'
+	option min_pwm '50'
+	option max_pwm '255'
+	option interval_sec '1.0'
+	option thermal_path '/sys/class/thermal/thermal_zone0/temp'
+	option pwm_path '/sys/class/hwmon/hwmon0/pwm1'
+	option pwm_enable_path '/sys/class/hwmon/hwmon0/pwm1_enable'
+	option dry_run '0'
+	option debug '0'
+
+# Case fan: gentle curve, lower setpoint, different sensor and header.
+config fancontrol 'case'
+	option enabled '1'
+	option mode 'pid'
+	option setpoint '45'
+	option kp '1.5'
+	option ki '0.2'
+	option kd '1.0'
+	option min_pwm '0'
+	option max_pwm '200'
+	option interval_sec '2.0'
+	option thermal_path '/sys/class/thermal/thermal_zone1/temp'
+	option pwm_path '/sys/class/hwmon/hwmon1/pwm2'
+	option pwm_enable_path '/sys/class/hwmon/hwmon1/pwm2_enable'
+	option dry_run '0'
+	option debug '0'
+
+# Disabled example: kept in config for reference, will not run.
+config fancontrol 'disabled_example'
+	option enabled '0'
+	option mode 'fixed'
+	option fixed_pwm '128'
+	option thermal_path '/sys/class/thermal/thermal_zone2/temp'
+	option pwm_path '/sys/class/hwmon/hwmon2/pwm3'
+	option pwm_enable_path '/sys/class/hwmon/hwmon2/pwm3_enable'
+
+# Option reference (per-fan):
+#   enabled       0|1 (default 1)
+#   mode          pid|fixed|table (default pid)
+#   setpoint      target temperature in °C (pid mode)
+#   kp, ki, kd    PID gains
+#   min_pwm       minimum PWM output 0–255 (default 0)
+#   max_pwm       maximum PWM output 0–255 (default 255)
+#   fixed_pwm     PWM used in fixed mode (default 128)
+#   interval_sec  control loop period in seconds (default 1.0)
+#   thermal_path  sysfs path to thermal zone (millidegrees Celsius)
+#   pwm_path      sysfs path to pwm output
+#   pwm_enable_path sysfs path to pwm_enable (manual mode)
+#   dry_run       0|1, log without writing (default 0)
+#   debug         0|1, include PID term breakdown in logs (default 0)
