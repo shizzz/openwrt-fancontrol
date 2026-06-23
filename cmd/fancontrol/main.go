@@ -3,6 +3,8 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -13,7 +15,23 @@ import (
 	"github.com/shizzz/openwrt-fancontrol/internal/log"
 )
 
+// Set at link time via -ldflags "-X main.Version=... -X main.Commit=... -X main.BuildDate=...".
+var (
+	Version   = "dev"
+	Commit    = "unknown"
+	BuildDate = "unknown"
+)
+
 func main() {
+	showVersion := flag.Bool("v", false, "print version and exit")
+	flag.BoolVar(showVersion, "version", false, "print version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		printVersion()
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Errorf("failed to load config: %v", err)
@@ -61,4 +79,15 @@ func main() {
 	wg.Wait()
 
 	logger.Infof("openwrt-fancontrol stopped cleanly")
+}
+
+func printVersion() {
+	fmt.Printf("openwrt-fancontrol %s", Version)
+	if Commit != "" && Commit != "unknown" {
+		fmt.Printf(" (%s)", Commit)
+	}
+	if BuildDate != "" && BuildDate != "unknown" {
+		fmt.Printf(" built %s", BuildDate)
+	}
+	fmt.Println()
 }
