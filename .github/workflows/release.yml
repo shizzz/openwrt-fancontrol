@@ -129,21 +129,6 @@ jobs:
             echo "#   x86_64   -> linux-amd64"
           } > hashes.mk
 
-          {
-            echo "## SHA256 checksums"
-            echo ""
-            echo '```'
-            cat SHA256SUMS
-            echo '```'
-            echo ""
-            echo "Download \`hashes.mk\` from this release and include it in the OpenWrt package Makefile:"
-            echo ""
-            echo '```makefile'
-            echo 'include $(CURDIR)/hashes.mk'
-            echo 'PKG_HASH:=$(PKG_HASH_$(OPENWRT_FANCONTROL_SUFFIX))'
-            echo '```'
-          } > checksums-body.md
-
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
